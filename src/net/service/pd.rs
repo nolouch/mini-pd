@@ -9,7 +9,7 @@ use grpcio::{RequestStream, RpcContext, UnarySink};
 use kvproto::metapb;
 use kvproto::pdpb::{self, *};
 use rocksdb::DB;
-use slog::{error, Logger};
+use slog::{error, info, Logger};
 use std::cmp;
 use std::sync::Arc;
 use yatp::task::future::TaskCell;
@@ -19,11 +19,11 @@ use yatp::Remote;
 
 fn new_tso_response(cluster_id: u64, count: u64, start: &mut u64) -> TsoResponse {
     let mut resp = TsoResponse::default();
+    *start += count;
     if fill_header_raw(resp.mut_header(), cluster_id) {
         resp.set_count(count as u32);
         allocator::fill_timestamp(*start, resp.mut_timestamp());
     }
-    *start += count;
     resp
 }
 
@@ -187,14 +187,22 @@ impl Pd for PdService {
     ) {
         let mut resp = check_cluster!(ctx, self.cluster, sink, req, GetMembersResponse);
         let cluster = self.cluster.clone();
+        let logger = self.logger.clone();
         let f = async move {
             match cluster.get_members().await {
                 Ok((leader, peers)) => {
+                    info!(
+                        logger,
+                        "get leader {:?}, {:?}",
+                        leader,
+                        leader.get_client_urls()
+                    );
                     resp.set_leader(leader.clone());
                     resp.set_etcd_leader(leader);
                     resp.set_members(peers.into());
                 }
                 Err(e) => {
+                    error!(logger, "get leader {}", e);
                     fill_error(resp.mut_header(), ErrorType::UNKNOWN, format!("{}", e));
                 }
             }
@@ -213,37 +221,51 @@ impl Pd for PdService {
         let logger = self.logger.clone();
         let meta = self.cluster.meta().clone();
         let f = async move {
-            let (batch_tx, mut batch_rx) = mpsc::channel(100);
+            let (batch_tx, mut batch_rx) = mpsc::channel(1);
             let collect = async move {
                 let mut wrap_stream = stream.map_err(Error::Rpc);
                 let mut wrap_tx =
                     batch_tx.sink_map_err(|e| Error::Other(format!("failed to forward: {}", e)));
                 wrap_tx.send_all(&mut wrap_stream).await
             };
-            let mut buf = Vec::with_capacity(100);
+            let mut buf = Vec::with_capacity(1);
             let batch_process = async {
                 loop {
                     buf.clear();
                     let count = match batch_rx.next().await {
-                        Some(r) => cmp::max(r.get_count() as u64, 1),
+                        Some(r) => {
+                            if r.get_count() == 0 {
+                                sink.close().await?;
+                                return Ok::<_, Error>(());
+                            }
+                            r.get_count() as u64
+                        }
                         None => {
                             sink.close().await?;
                             return Ok::<_, Error>(());
                         }
                     };
+
                     let mut sum = count;
-                    while buf.len() < 100 {
+                    while buf.len() < 1 {
                         if let Ok(Some(r)) = batch_rx.try_next() {
-                            let c = cmp::max(r.get_count() as u64, 1);
+                            if r.get_count() == 0 {
+                                sink.close().await?;
+                                return Ok::<_, Error>(());
+                            }
+                            let c = r.get_count() as u64;
                             sum += c;
                             buf.push(c);
                         } else {
                             break;
                         }
                     }
+                    //                    info!(logger, "count: {}, sum: {}", count, sum);
+
                     let ts = match allocator.alloc(sum).await {
                         Ok(t) => t,
                         Err(e) => {
+                            error!(logger, "count: {}, sum: {}, e {:?}", count, sum, e);
                             for i in 0..buf.len() + 1 {
                                 let mut resp = TsoResponse::default();
                                 let header = resp.mut_header();
@@ -277,7 +299,8 @@ impl Pd for PdService {
                 error!(logger, "failed to handle tso: {:?}", res);
             }
         };
-        ctx.spawn(f);
+        self.remote.spawn(f);
+        //ctx.spawn(f);
     }
 
     fn bootstrap(

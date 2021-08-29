@@ -43,6 +43,7 @@ struct TsoWatcher {
 
 impl TsoWatcher {
     async fn init_tso_limit(&mut self) -> Option<(u64, Option<u64>)> {
+        info!(self.allocator.logger, "init tso limit");
         let msg = Msg::WaitEvent {
             event: Event::CommittedToCurrentTermAsLeader,
             notifier: self.tx.clone(),
@@ -52,7 +53,10 @@ impl TsoWatcher {
             Some(Res::RoleInfo { term, .. }) => term,
             _ => return None,
         };
-        info!(self.allocator.logger, "became leader at term {}", term);
+        info!(
+            self.allocator.logger,
+            "became tso allocator at term {}", term
+        );
         self.allocator
             .sender
             .send(Msg::snapshot(self.tx.clone()))
@@ -170,7 +174,9 @@ impl TsoAllocator {
         val = loop {
             let limit = self.tso.upper_limit.load(Ordering::SeqCst);
             if val >= limit {
-                return Err(Error::Other("no tso available".to_string()));
+                return Err(Error::Other(
+                    format!("no tso available, val {} limit {}", val, limit).to_string(),
+                ));
             }
             let new_val = val + count;
             match self.tso.val.compare_exchange_weak(
@@ -183,6 +189,7 @@ impl TsoAllocator {
                 Err(v) => val = v,
             }
         };
+        return Ok(val);
         let (tx, mut rx) = mpsc::channel(1);
         self.sender
             .send(Msg::check_snapshot(term, tx.clone()))

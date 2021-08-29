@@ -42,7 +42,10 @@ impl Server {
             logger,
             address_map,
             config,
-            pool: yatp::Builder::new("futures").build_future_pool(),
+            pool: yatp::Builder::new("futures")
+                .min_thread_count(8)
+                .max_thread_count(16)
+                .build_future_pool(),
             handle: None,
             server: None,
         }
@@ -52,12 +55,7 @@ impl Server {
         if self.handle.is_some() {
             return Err(Error::Other("server has been started".to_owned()));
         }
-        let raft_env = Arc::new(
-            EnvBuilder::new()
-                .name_prefix("grpc-raft")
-                .cq_count(1)
-                .build(),
-        );
+        let raft_env = Arc::new(EnvBuilder::new().name_prefix("grpc").cq_count(1).build());
         let remote = self.pool.remote();
         self.address_map
             .lock()

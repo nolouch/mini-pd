@@ -169,7 +169,9 @@ impl IdAllocator {
         val = loop {
             let limit = self.id.upper_limit.load(Ordering::SeqCst);
             if val >= limit {
-                return Err(Error::Other("no tso available".to_string()));
+                return Err(Error::Other(
+                    format!("no tso available, val {} limit {}", val, limit).to_string(),
+                ));
             }
             let new_val = val + count;
             match self.id.val.compare_exchange_weak(

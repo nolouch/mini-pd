@@ -236,8 +236,8 @@ impl Cluster {
     pub fn new(sender: channel::Sender<Msg>, remote: &Remote<TaskCell>, logger: Logger) -> Cluster {
         let cluster = Cluster {
             meta: Arc::new(ClusterMeta {
-                id: AtomicU64::new(0),
-                bootstrap: AtomicU8::new(NOT_BOOTSTRAP),
+                id: AtomicU64::new(1239123),
+                bootstrap: AtomicU8::new(BOOTSTRAPPED),
                 regions: Default::default(),
                 stores: Default::default(),
                 region_caches: Default::default(),
@@ -293,6 +293,7 @@ impl Cluster {
     }
 
     pub async fn get_members(&self) -> Result<(Member, Vec<Member>)> {
+        info!(self.logger.clone(), "testing");
         let (tx, mut rx) = mpsc::channel(1);
         let msg = Msg::WaitEvent {
             event: Event::CommittedToCurrentTerm,
@@ -314,14 +315,15 @@ impl Cluster {
             Some(Res::Snapshot(s)) => s,
             res => return Err(Error::Other(format!("failed to get snap: {:?}", res))),
         };
+        info!(self.logger.clone(), "testing2");
         let ids = kv::load_replica_ids(&snap)?;
         let leader_addr = kv::load_address(&snap, leader);
-        let leader = new_member(leader, leader_addr);
+        let leader = new_member(leader, format!("http://{}", leader_addr));
         let members = ids
             .into_iter()
             .map(|id| {
                 let addr = kv::load_address(&snap, id);
-                new_member(id, addr)
+                new_member(id, format!("http://{}", addr))
             })
             .collect();
         Ok((leader, members))

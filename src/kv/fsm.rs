@@ -254,6 +254,7 @@ impl Fsm {
             }
             Msg::Snapshot { term, mut notifier } => {
                 // This is not technically safe, should use uuid.
+                //                info!(self.logger, "testing3");
                 let my_term = self.node.raft.term;
                 if term.map_or(false, |t| t != my_term) {
                     let msg = format!("term not match {} != {}", term.unwrap(), my_term);
@@ -271,6 +272,7 @@ impl Fsm {
                 mut notifier,
             } => {
                 let leader_id = self.node.raft.leader_id;
+                info!(self.logger, "leader_id {}, event {:#?}", leader_id, event);
                 if leader_id != INVALID_ID {
                     if event == Event::Elected
                         || event == Event::BecameLeader && leader_id == self.id()
@@ -281,6 +283,12 @@ impl Fsm {
                             && self.node.raft.commit_to_current_term()
                     {
                         let _ = notifier.try_send(self.role_info());
+                    } else {
+                        self.notifiers
+                            .wait_event
+                            .entry(event)
+                            .or_default()
+                            .push(notifier);
                     }
                 } else {
                     self.notifiers
@@ -447,7 +455,7 @@ impl Fsm {
         let mut sync_log = false;
         if self.has_ready && self.node.has_ready() {
             let mut ready = self.node.ready();
-            self.notify_role_changed();
+
             let applied_index = if !ready.committed_entries().is_empty() {
                 Some(self.handle_committed_entries(ready.take_committed_entries()))
             } else {
@@ -489,6 +497,7 @@ impl Fsm {
             // Don't need to wait syncing here. If the node is crash and restarted,
             // ReadIndex will make sure all pending entries must be seen.
             self.notify_applied();
+            self.notify_role_changed();
         }
         self.has_ready = false;
         if self.unsynced_data_size >= 512 * 1024

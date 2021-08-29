@@ -110,7 +110,7 @@ impl Debug for Res {
     }
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum Event {
     Elected,
     BecameLeader,
